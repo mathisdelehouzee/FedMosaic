@@ -1,0 +1,9 @@
+# Ignorer environnement virtuel
+.env_fedmo/
+
+# Ignorer les données téléchargées
+Download_data/
+physionet.org/
+
+# Ignorer les logs wget
+wget-log
