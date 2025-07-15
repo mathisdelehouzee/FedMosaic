@@ -73,6 +73,32 @@ def generate_synthetic_dataset(n_samples=1000):
 
     return Dataset.from_pandas(df)
 
+def load_dataset_from_npy(
+        features_path='features.npy', 
+        labels_path='labels.npy', 
+    ):
+
+    X = np.load(features_path, allow_pickle=True)  # (n_samples, 1024)
+    y = np.load(labels_path)  # (n_samples,)
+
+    n_samples = X.shape[0]
+
+    # Apply masking if requested
+    for i in range(n_samples):
+        if np.random.rand() < FRACTION_MASKED:
+            if MASK_TYPE == 'img':
+                X[i, :512] = 0
+            else:
+                X[i, 512:] = 0
+
+    data_dict = {
+        'feature': [x.tolist() for x in X],
+        'label': y.tolist()
+    }
+
+    hf_dataset = Dataset.from_dict(data_dict)
+    return hf_dataset
+
 def load_data(partition_id: int, num_partitions: int, synthetic_data:bool):
     """Load partition CIFAR10 data."""
     # Only initialize `FederatedDataset` once
@@ -82,7 +108,7 @@ def load_data(partition_id: int, num_partitions: int, synthetic_data:bool):
         if not synthetic_data:
             #Real dataset
             partitioner = IidPartitioner(num_partitions=num_partitions)
-            partitioner.dataset = ... #Load real data
+            partitioner.dataset = load_dataset_from_npy("path", "labels")
             partition = fds.load_partition(partition_id)
         else:
             #Todo: Add mask to randomly select both, some or none
