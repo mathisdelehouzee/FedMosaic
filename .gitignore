@@ -7,3 +7,7 @@ physionet.org/
 
 # Ignorer les logs wget
 wget-log
+patient_url3.txt
+patient_urls4.txt
+patient_urls2.txt
+patient_urls.txt
