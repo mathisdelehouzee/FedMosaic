@@ -1,6 +1,2 @@
-# FedMosaic
 
 Dataset on the drive : https://drive.google.com/drive/folders/1rQHx9VdcJnz1_70k7F4W3NFXX_uAH9Cp?usp=drive_link
-
-
-Dataset use case : Opacity lunge 2000 samples
