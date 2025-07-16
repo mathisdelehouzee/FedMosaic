@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from flwr.common import Context
 
-FRACTION_MASKED = 1.0
+FRACTION_MASKED = 0.0
 MASK_TYPE = "img"
 
 class Net(nn.Module):
@@ -30,6 +30,7 @@ class Net(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)  # No sigmoid here
         return x.squeeze(1)  # Output shape: (batch_size,)
+
 
 fds = None  # Cache FederatedDataset
 
@@ -73,15 +74,16 @@ def generate_synthetic_dataset(n_samples=1000):
 
     return Dataset.from_pandas(df)
 
-def load_dataset_from_npy(
-        features_path='features.npy', 
-        labels_path='labels.npy', 
-    ):
+def load_real_dataset():
 
-    X = np.load(features_path, allow_pickle=True)  # (n_samples, 1024)
-    y = np.load(labels_path)  # (n_samples,)
+    df = pd.read_csv("./embeddings/embeddings/fused_clip_embeddings.csv")
+    df.drop("clip_textimg_512", axis=1, inplace=True)
+    df.drop("filename", axis=1, inplace=True)
+    
+    y = df.iloc[:, 0].to_numpy(dtype=np.float32)
+    X = df.iloc[:, 1:].to_numpy(dtype=np.float32)
 
-    n_samples = X.shape[0]
+    n_samples = len(y)
 
     # Apply masking if requested
     for i in range(n_samples):
@@ -97,19 +99,19 @@ def load_dataset_from_npy(
     }
 
     hf_dataset = Dataset.from_dict(data_dict)
+
     return hf_dataset
 
-def load_data(partition_id: int, num_partitions: int, synthetic_data:bool):
+def load_data(partition_id: int, num_partitions: int, synthetic:bool):
     """Load partition CIFAR10 data."""
     # Only initialize `FederatedDataset` once
     global fds
     if fds is None:
-
-        if not synthetic_data:
+        if not synthetic:
             #Real dataset
             partitioner = IidPartitioner(num_partitions=num_partitions)
-            partitioner.dataset = load_dataset_from_npy("path", "labels")
-            partition = fds.load_partition(partition_id)
+            partitioner.dataset = load_real_dataset()
+            partition = partitioner.load_partition(partition_id)
         else:
             #Todo: Add mask to randomly select both, some or none
             partitioner = IidPartitioner(num_partitions=num_partitions)

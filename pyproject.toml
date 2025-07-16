@@ -35,4 +35,4 @@ fraction-masked=0.5
 default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
-options.num-supernodes = 50
+options.num-supernodes = 5
