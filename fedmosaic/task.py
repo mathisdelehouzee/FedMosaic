@@ -15,7 +15,7 @@ import pandas as pd
 from flwr.common import Context
 
 FRACTION_MASKED = 0.0
-MASK_TYPE = "img"
+MASK_TYPE = "text"
 
 class Net(nn.Module):
     def __init__(self):
@@ -99,6 +99,7 @@ def load_real_dataset():
     }
 
     hf_dataset = Dataset.from_dict(data_dict)
+    print(X[0])
 
     return hf_dataset
 
@@ -111,18 +112,20 @@ def load_data(partition_id: int, num_partitions: int, synthetic:bool):
             #Real dataset
             partitioner = IidPartitioner(num_partitions=num_partitions)
             partitioner.dataset = load_real_dataset()
-            partition = partitioner.load_partition(partition_id)
+            fds = partitioner
         else:
             #Todo: Add mask to randomly select both, some or none
             partitioner = IidPartitioner(num_partitions=num_partitions)
             partitioner.dataset = generate_synthetic_dataset(1000)
-            partition = partitioner.load_partition(partition_id=partition_id)
-
-    # Divide data on each node: 80% train, 20% test
-    partition_train_test = partition.train_test_split(test_size=0.2)
+            fds = partitioner
+    
+    partition = fds.load_partition(partition_id=partition_id)
+    # Divide data on each node: 70% train, 30% test
+    partition_train_test = partition.train_test_split(test_size=0.3)
 
     def apply_transforms(batch):
-        batch["feature"] = [(torch.tensor(ft, dtype=torch.float32) - 0.5) / 0.5 for ft in batch["feature"]]
+        #batch["feature"] = [(torch.tensor(ft, dtype=torch.float32) - 0.5) / 0.5 for ft in batch["feature"]]
+        batch["feature"] = [torch.tensor(ft, dtype=torch.float32) for ft in batch["feature"]]
         return batch
 
     partition_train_test = partition_train_test.with_transform(apply_transforms)
@@ -135,7 +138,7 @@ def train(net, trainloader, epochs, device, feature="img"):
     """Train the model on the training set."""
     net.to(device)  # move model to GPU if available
     criterion = torch.nn.BCEWithLogitsLoss().to(device)
-    optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
+    optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
     net.train()
     running_loss = 0.0
     for _ in range(epochs):
@@ -165,7 +168,6 @@ def test(net, testloader, device, feature="img"):
             loss += criterion(outputs, labels).item()
             predicted = (torch.sigmoid(outputs) >= 0.5).long()
             correct += (predicted == labels).sum().item()
-            #correct += (torch.max(outputs.data, 1)[1] == labels).sum().item()
     accuracy = correct / len(testloader.dataset)
     loss = loss / len(testloader)
     return loss, accuracy
