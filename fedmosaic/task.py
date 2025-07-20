@@ -13,9 +13,14 @@ from torchvision.transforms import Compose, Normalize, ToTensor
 import numpy as np
 import pandas as pd
 from flwr.common import Context
+from datasets.utils.logging import disable_progress_bar
 
-FRACTION_MASKED = 0.0
-MASK_TYPE = "text"
+disable_progress_bar()
+
+DO_MASK = True
+FRACTION_MASKED = 0.5 # All data in that client will be masked
+DATA_PROPORTION = 1.0 # 100% of clients will have text and another will have img
+PARTITION_CACHE = {}
 
 class Net(nn.Module):
     def __init__(self):
@@ -31,48 +36,23 @@ class Net(nn.Module):
         x = self.fc3(x)  # No sigmoid here
         return x.squeeze(1)  # Output shape: (batch_size,)
 
+class CrossPNet(nn.Module):
+    def __init__(self):
+        super(CrossPNet, self).__init__()
+        self.fc1 = nn.Linear(512, 128)
+        self.fc2 = nn.Linear(128, 32)
+        self.fc3 = nn.Linear(32, 1)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)  # Flatten
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)  # No sigmoid here
+        return x.squeeze(1)  # Output shape: (batch_size,)
+
+
 
 fds = None  # Cache FederatedDataset
-
-def generate_synthetic_dataset(n_samples=1000):
-    """
-    Generates a DataFrame with two columns:
-    - 'features': each row contains a NumPy array of shape (1024,)
-    - 'label': binary class label (0 or 1)
-
-    Classification signal is embedded in two distinct subregions per class,
-    one in each half of the 1024-length feature vector.
-    
-    Returns:
-        df: pandas DataFrame with columns ['features', 'label']
-    """
-    X = np.random.uniform(0, 1, (n_samples, 1024))
-    y = np.random.randint(0, 2, size=(n_samples,))
-
-    for i in range(n_samples):
-        if y[i] == 0:
-            bandA = (512,12)
-            bandB = (1024,612)
-            X[i, bandA[1]:bandA[0]] += np.random.normal(3.0, 1.5, size=bandA[0] - bandA[1])
-            X[i, bandB[1]:bandB[0]] += np.random.normal(3.0, 1.5, size=bandB[0] - bandB[1])
-        else:
-            bandA = (300,0)
-            bandB = (850,512)
-            X[i, bandA[1]:bandA[0]] += np.random.normal(3.0, 1.5, size=bandA[0] - bandA[1])
-            X[i, bandB[1]:bandB[0]] += np.random.normal(3.0, 2.3, size=bandB[0] - bandB[1])
-
-        if np.random.rand() < FRACTION_MASKED:
-            if MASK_TYPE == "img":
-                X[i,:512] = 0
-            else:
-                X[i,512:] = 0
-
-    df = pd.DataFrame({
-        "feature": list(X),  # Each row holds a (1024,) array
-        "label": torch.tensor(y, dtype=torch.float)
-    })
-
-    return Dataset.from_pandas(df)
 
 def load_real_dataset():
 
@@ -85,41 +65,51 @@ def load_real_dataset():
 
     n_samples = len(y)
 
-    # Apply masking if requested
-    for i in range(n_samples):
-        if np.random.rand() < FRACTION_MASKED:
-            if MASK_TYPE == 'img':
-                X[i, :512] = 0
-            else:
-                X[i, 512:] = 0
-
     data_dict = {
         'feature': [x.tolist() for x in X],
         'label': y.tolist()
     }
 
     hf_dataset = Dataset.from_dict(data_dict)
-    print(X[0])
 
     return hf_dataset
 
+
+def mask_partition(partition: Dataset, partition_num):
+    # Usa o cache para obter ou definir o tipo de partição ('img' ou 'text')
+    if partition_num not in PARTITION_CACHE:
+        mask_type = 'img' if np.random.rand() < DATA_PROPORTION else 'text'
+        PARTITION_CACHE[partition_num] = mask_type
+    else:
+        mask_type = PARTITION_CACHE[partition_num]
+
+    def mask_example(example):
+        x = example['feature']
+        if np.random.rand() < FRACTION_MASKED and DO_MASK:
+            if mask_type == 'img':
+                x[:512] = [1] * 512
+            else:
+                x[512:] = [1] * 512
+
+        # Produto vetorial para fusão
+        x = [i * j for i, j in zip(x[:512], x[512:])]
+        example['feature'] = x
+
+        return example
+
+    return partition.map(mask_example)
+
 def load_data(partition_id: int, num_partitions: int, synthetic:bool):
-    """Load partition CIFAR10 data."""
     # Only initialize `FederatedDataset` once
     global fds
+    partitioner = IidPartitioner(num_partitions=num_partitions)
     if fds is None:
-        if not synthetic:
-            #Real dataset
-            partitioner = IidPartitioner(num_partitions=num_partitions)
-            partitioner.dataset = load_real_dataset()
-            fds = partitioner
-        else:
-            #Todo: Add mask to randomly select both, some or none
-            partitioner = IidPartitioner(num_partitions=num_partitions)
-            partitioner.dataset = generate_synthetic_dataset(1000)
-            fds = partitioner
-    
+        partitioner.dataset = load_real_dataset()
+        fds = partitioner
+
     partition = fds.load_partition(partition_id=partition_id)
+    partition = mask_partition(partition, partition_id)
+
     # Divide data on each node: 70% train, 30% test
     partition_train_test = partition.train_test_split(test_size=0.3)
 

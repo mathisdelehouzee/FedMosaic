@@ -10,8 +10,8 @@ license = "Apache-2.0"
 dependencies = [
     "flwr[simulation]>=1.19.0",
     "torch==2.5.1",
-    "datasets",
     "wandb",
+    "datasets",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -27,8 +27,9 @@ clientapp = "fedmosaic.client_app:app"
 [tool.flwr.app.config]
 num-server-rounds = 100
 fraction-fit = 1
-local-epochs = 1
+local-epochs = 3
 use-wandb = true
+run-name = "fedavg10-partial-50-vecmul"
 
 [tool.flwr.federations]
 default = "local-simulation"

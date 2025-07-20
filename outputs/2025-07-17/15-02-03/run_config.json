@@ -1,0 +1,1 @@
+{"num-server-rounds": 100, "fraction-fit": 1, "local-epochs": 3, "use-wandb": true, "run-name": "fedavg10-mixed-33t-vecmul"}

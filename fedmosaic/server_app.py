@@ -1,4 +1,9 @@
 """fedmosaic: A Flower / PyTorch app."""
+import torch, wandb, json
+import numpy as np
+from collections import OrderedDict
+from datetime import datetime
+from pathlib import Path
 
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
@@ -6,10 +11,7 @@ from flwr.server.strategy import FedAvg
 from flwr.common import logger, parameters_to_ndarrays
 from flwr.common.typing import UserConfig
 
-from fedmosaic.task import Net, get_weights
-
-import torch, wandb, json
-import numpy as np
+from fedmosaic.task import CrossPNet, get_weights, set_weights
 
 from logging import INFO
 
@@ -18,9 +20,24 @@ PROJECT_NAME = "FLOWER-fedmosaic"
 def average_metrics(metrics):
     accuracies_tf = np.mean([metric["accuracy"] for _, metric in metrics])
     return {
+        "client_accuracies": [metric["accuracy"] for _, metric in metrics],
         "accuracy": accuracies_tf,
     }
 
+def create_run_dir(config: UserConfig) -> Path:
+    """Create a directory where to save results from this run."""
+    # Create output directory given current timestamp
+    current_time = datetime.now()
+    run_dir = current_time.strftime("%Y-%m-%d/%H-%M-%S")
+    # Save path is based on the current directory
+    save_path = Path.cwd() / f"outputs/{run_dir}"
+    save_path.mkdir(parents=True, exist_ok=False)
+
+    # Save run config as json
+    with open(f"{save_path}/run_config.json", "w", encoding="utf-8") as fp:
+        json.dump(config, fp)
+
+    return save_path, run_dir
 
 class FedAvgButSaves(FedAvg):
     """A class that behaves like FedAvg but has extra functionality.
@@ -35,6 +52,7 @@ class FedAvgButSaves(FedAvg):
 
         # Create a directory where to save results from this run
         self.save_path, self.run_dir = create_run_dir(run_config)
+        self.run_name = run_config["run-name"]
         self.use_wandb = use_wandb
         # Initialise W&B if set
         if use_wandb:
@@ -45,10 +63,11 @@ class FedAvgButSaves(FedAvg):
 
         # A dictionary to store results as they come
         self.results = {}
+        self.latest_params = []
 
     def _init_wandb_project(self):
         # init W&B
-        wandb.init(project=PROJECT_NAME, name=f"{str(self.run_dir)}-ServerApp")
+        wandb.init(project=PROJECT_NAME, name=f"{str(self.run_name)}-fedmosaic")
 
     def _store_results(self, tag: str, results_dict):
         """Store results in dictionary, then save as JSON."""
@@ -65,7 +84,7 @@ class FedAvgButSaves(FedAvg):
         with open(f"{self.save_path}/results.json", "w", encoding="utf-8") as fp:
             json.dump(self.results, fp)
 
-    def _update_best_acc(self, round, accuracy, parameters):
+    def _update_best_acc(self, round, accuracy):
         """Determines if a new best global model has been found.
 
         If so, the model checkpoint is saved to disk.
@@ -77,8 +96,8 @@ class FedAvgButSaves(FedAvg):
             # Instead we are going to apply them to a PyTorch
             # model and save the state dict.
             # Converts flwr.common.Parameters to ndarrays
-            ndarrays = parameters_to_ndarrays(parameters)
-            model = Net()
+            ndarrays = parameters_to_ndarrays(self.latest_params)
+            model = CrossPNet()
             set_weights(model, ndarrays)
             # Save the PyTorch model
             file_name = f"model_state_acc_{accuracy}_round_{round}.pth"
@@ -95,25 +114,25 @@ class FedAvgButSaves(FedAvg):
         if self.use_wandb:
             # Log centralized loss and metrics to W&B
             wandb.log(results_dict, step=server_round)
+            
+    def aggregate_fit(
+            self,
+            server_round,
+            results,
+            failures
+        ):
 
-    def evaluate(self, server_round, parameters):
-        """Run centralized evaluation if callback was passed to strategy init."""
-        loss, metrics = super().evaluate(server_round, parameters)
+        parameters_aggregated, metrics_aggregated = super().aggregate_fit(server_round, results, failures)
+        self.latest_params = parameters_aggregated
 
-        # Save model if new best central accuracy is found
-        self._update_best_acc(server_round, metrics["centralized_accuracy"], parameters)
-
-        # Store and log
-        self.store_results_and_log(
-            server_round=server_round,
-            tag="centralized_evaluate",
-            results_dict={"centralized_loss": loss, **metrics},
-        )
-        return loss, metrics
+        return parameters_aggregated, metrics_aggregated
 
     def aggregate_evaluate(self, server_round, results, failures):
         """Aggregate results from federated evaluation."""
         loss, metrics = super().aggregate_evaluate(server_round, results, failures)
+
+        # Save model if new best accuracy is found
+        self._update_best_acc(server_round, metrics["accuracy"])
 
         # Store and log
         self.store_results_and_log(
@@ -127,9 +146,10 @@ def server_fn(context: Context):
     # Read from config
     num_rounds = context.run_config["num-server-rounds"]
     fraction_fit = context.run_config["fraction-fit"]
+    use_wandb = context.run_config["use-wandb"]
 
     # Initialize model parameters
-    ndarrays = get_weights(Net())
+    ndarrays = get_weights(CrossPNet())
     parameters = ndarrays_to_parameters(ndarrays)
 
     # Define strategy
@@ -138,6 +158,8 @@ def server_fn(context: Context):
         fraction_evaluate=1.0,
         evaluate_metrics_aggregation_fn=average_metrics,
         min_available_clients=1,
+        run_config = context.run_config,
+        use_wandb=use_wandb,
         initial_parameters=parameters,
     )
     config = ServerConfig(num_rounds=num_rounds)
