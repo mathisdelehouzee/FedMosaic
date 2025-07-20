@@ -4,6 +4,7 @@
 # Ignorer les données téléchargées
 Download_data/
 physionet.org/
+.wanb/
 
 # Ignorer les logs wget
 wget-log
