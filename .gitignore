@@ -4,6 +4,8 @@
 # Ignorer les données téléchargées
 Download_data/
 physionet.org/
+data/
+MedClip/
 
 # Ignorer les logs wget
 wget-log
